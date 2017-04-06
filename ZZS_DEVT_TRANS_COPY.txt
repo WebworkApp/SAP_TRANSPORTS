@@ -1,0 +1,1104 @@
+REPORT zzs_devt_trans_copy MESSAGE-ID 00.
+*----------------------------------------------------------------------*
+* Created by NM for Cross System Transport Request Copy
+*----------------------------------------------------------------------*
+
+*---------------------------------------------- LOCAL CLASS DEFINITION *
+CLASS trans_copy DEFINITION FINAL.
+  PUBLIC SECTION.
+    TYPE-POOLS: abap, icon.
+*--------------------------------------------------- Public Structures *
+    TYPES ty_so_trs TYPE RANGE OF trkorr. "Table type requests Range
+
+    TYPES:
+      BEGIN OF ty_tr,
+        legacy  TYPE icon_d,      "Legacy system
+        trkorr  TYPE trkorr,      "Request
+        as4text TYPE trordertxt,  "Request description
+        as4user TYPE tr_as4user,  "Request user
+        as4date TYPE as4date,     "Request date
+        task    TYPE trkorr,      "Task request
+        release TYPE icon_d,      "Release status
+        export  TYPE icon_d,      "Export status
+        upload  TYPE icon_d,      "Upload status
+        queue   TYPE icon_d,      "Queue status
+        import  TYPE icon_d,      "Import status
+      END OF ty_tr.
+
+    TYPES tty_trs TYPE TABLE OF ty_tr.  "Table type requests
+
+    DATA t_requests TYPE TABLE OF ty_tr.  "Requests table
+
+*------------------------------------------------------ Public Methods *
+    METHODS:
+*---------- Public Methods Constructor Definition ----------*
+      constructor,
+
+*---------- Public Methods request F4 Definition ----------*
+      tr_f4 CHANGING c_tr TYPE trkorr,  "Request
+
+*---------- Public Methods system F4 Definition ----------*
+      system_f4 CHANGING c_system TYPE tmssysnam, "Target System name
+
+*---------- Public Methods system F4 Definition ----------*
+      client_f4 IMPORTING i_system TYPE tmssysnam
+                 CHANGING c_client TYPE tmsclient, "Target client
+
+*---------- Public Methods upload directory F4 Definition ----------*
+      ipath_f4 CHANGING c_ipath TYPE string,  "Upload directory
+
+*---------- Public Methods screen PAI Definition ----------*
+      screen_pai IMPORTING i_so_trs TYPE ty_so_trs  "Requests Range
+                           i_export TYPE abap_bool  "Export Only
+                           i_system TYPE tmssysnam  "Target System
+                           i_client TYPE tmsclient  "Target Client
+                           i_import TYPE abap_bool  "Import external requests
+                           i_ipath  TYPE string,    "Import directory,
+
+
+
+*---------- Public Methods add requests Definition ----------*
+      add_requests.
+
+*----------------------------------------------------- Public Handlers *
+    METHODS:
+*---------- Public Handler On User Command Definition ----------*
+      on_user_command FOR EVENT added_function OF cl_salv_events  IMPORTING e_salv_function,
+
+*---------- Public Handler On Double Click Definition ----------*
+      on_double_click FOR EVENT double_click OF cl_salv_events_table IMPORTING row column. "#EC NEEDED
+
+  PRIVATE SECTION.
+*-------------------------------------------------- Private Structures *
+    TYPES:
+      BEGIN OF ty_sel_requests,
+        trkorr TYPE trkorr,      "Request
+      END OF ty_sel_requests.
+
+    TYPES tty_sel_requests TYPE TABLE OF ty_sel_requests.  "Table type for seledted requests
+
+    DATA t_so_trs TYPE RANGE OF trkorr.  "Table type requests Range
+
+*--------------------------------------------------- Private Variables *
+    DATA:
+      v_export  TYPE abap_bool, "Export only
+      v_system  TYPE tmssysnam, "Target system
+      v_client  TYPE tmsclient, "Target Client
+      v_import  TYPE abap_bool, "Import external requests
+      v_ipath   TYPE string,    "Import directory
+      v_percent TYPE i,         "Progress bar percentage
+      v_domain  TYPE tmsdomnam. "Transport Domain
+
+    DATA o_requests TYPE REF TO cl_salv_table. "ALV Object
+
+*----------------------------------------------------- Private Methods *
+    METHODS:
+*---------- Private Methods progress bar Definition ----------*
+      progress_bar IMPORTING value(i_value) TYPE itex132 "#EC CI_VALPAR
+                                   i_tabix  TYPE i,
+
+*---------- Private Methods popup to confirm Definition ----------*
+      popup_to_confirm IMPORTING i_title    TYPE any
+                                 i_question TYPE any
+                       RETURNING value(r_answer) TYPE char1,
+
+*---------- Private Methods read domain definition ----------*
+      read_domain,
+
+*---------- Private Methods hide SO tabs definition ----------*
+      hide_so_tabs,
+
+*---------- Private Methods display requests Definition ----------*
+      display_requests,
+
+*---------- Private Methods export requests Definition ----------*
+      export_requests IMPORTING it_requests TYPE tty_sel_requests , "Table type requests
+
+*---------- Private Methods import requests Definition ----------*
+      import_requests IMPORTING it_requests TYPE tty_sel_requests , "Table type requests
+
+*---------- Private Methods release requests Definition ----------*
+      release_request IMPORTING i_request TYPE trkorr             "Request
+                      RETURNING value(r_released) TYPE abap_bool, "Release flag
+
+*---------- Private Methods download server requests Definition ----------*
+      download_app_request IMPORTING i_subdir   TYPE any      "Transport sub directory
+                                     i_fname    TYPE any      "File name
+                                     i_transdir TYPE text255  "Transport directory
+                                     i_folder   TYPE string   "Directory
+                                     i_sep      TYPE char1    "Separator
+                           RETURNING value(r_download) TYPE abap_bool,  "Download flag
+
+*---------- Private Methods add requests from files Definition ----------*
+      add_requests_files,
+
+*---------- Private Methods Upload request file Definition ----------*
+      upload_request IMPORTING i_request TYPE trkorr             "Request
+                     RETURNING value(r_imported) TYPE abap_bool, "File import status
+
+*---------- Private Methods Add request to queue Definition ----------*
+      add_request_queue IMPORTING i_request TYPE trkorr           "Request
+                        RETURNING value(r_added) TYPE abap_bool,  "Added to queue
+
+*---------- Private Methods Add request to queue Definition ----------*
+      import_request IMPORTING i_request         TYPE trkorr           "Request
+                     RETURNING value(r_imported) TYPE abap_bool.  "Imported
+
+ENDCLASS.                    "trans_copy DEFINITION
+
+*--------------------------------------------------------- GLOBAL DATA *
+TABLES e070.  "Change & Transport System: Header of Requests/Tasks
+
+DATA go_tc TYPE REF TO trans_copy. "Main class
+
+*---------------------------------------------------- SELECTION SCREEN *
+*------------------------------------------------ Transports selection *
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE text-b01.
+SELECTION-SCREEN SKIP 1.
+
+SELECT-OPTIONS so_tr FOR e070-trkorr NO INTERVALS.  "Transport Requests
+PARAMETERS:
+  p_export AS CHECKBOX,     "Export Only
+  p_system TYPE tmssysnam,  "Target System
+  p_client TYPE tmsclient.  "Target Client
+
+SELECTION-SCREEN SKIP 1.
+PARAMETERS:
+  p_import AS CHECKBOX, "Import external requests
+  p_ipath TYPE string.  "Import directory
+
+SELECTION-SCREEN SKIP 1.
+SELECTION-SCREEN END OF BLOCK b01.
+
+*-------------------------------------------- Selection Screen Events PAI Helps *
+*---------- Transport request ----------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR so_tr-low.
+  go_tc->tr_f4( CHANGING c_tr = so_tr-low ).
+*---------- Target System Name ----------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_system.
+  go_tc->system_f4( CHANGING c_system = p_system ).
+*---------- Target Client ----------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_client.
+  go_tc->client_f4( EXPORTING i_system = p_system CHANGING c_client = p_client ).
+*---------- Upload directory ----------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_ipath.
+  go_tc->ipath_f4( CHANGING c_ipath = p_ipath ).
+
+*------------------------------------------------ SELECTION SCREEN PAI *
+AT SELECTION-SCREEN.
+  go_tc->screen_pai( i_so_trs = so_tr[]     "Requests
+                     i_export = p_export    "Export only
+                     i_system = p_system    "Target system
+                     i_client = p_client    "Target client
+                     i_import = p_import    "Import externaç requests
+                     i_ipath  = p_ipath ).  "Import  directory
+
+*------------------------------------------------------- REPORT EVENTS *
+*----------------------------------------------- Initialization events *
+INITIALIZATION.
+  CREATE OBJECT go_tc.  "Create main class
+
+*---------------------------------------------------- Executing events *
+START-OF-SELECTION.
+  go_tc->add_requests( ).     "Add request for processing
+
+*------------------------------------------ LOCAL CLASS IMPLEMENTATION *
+CLASS trans_copy IMPLEMENTATION.
+
+*---------------------------- Public Method Constructor Implementation *
+  METHOD constructor.
+    read_domain( ).
+    hide_so_tabs( ).
+  ENDMETHOD.                    "constructor
+
+*---------------------------- Public Methods request F4 Implementation *
+  METHOD tr_f4.
+    CALL FUNCTION 'TR_F4_REQUESTS'
+      IMPORTING
+        ev_selected_request = c_tr.
+  ENDMETHOD.                    "tr_f4
+
+*----------------------------- Public Methods system F4 Implementation *
+  METHOD system_f4.
+    CALL FUNCTION 'TMS_UI_F4_SYSTEMS'
+      CHANGING
+        cv_system = c_system.
+  ENDMETHOD.                    "sys_f4
+
+*----------------------------- Public Methods client F4 Implementation *
+  METHOD client_f4.
+    IF i_system IS NOT INITIAL.
+      CALL FUNCTION 'TMS_UI_F4_CLIENTS'
+        EXPORTING
+          iv_system                = i_system
+        CHANGING
+          cv_client                = c_client
+        EXCEPTIONS
+          cancelled_by_user        = 1
+          read_client_table_failed = 2
+          OTHERS                   = 3.
+    ENDIF.
+  ENDMETHOD.                    "sys_f4
+
+*------------------- Public Methods upload directory F4 Implementation *
+  METHOD ipath_f4.
+    CALL METHOD cl_gui_frontend_services=>directory_browse
+      CHANGING
+        selected_folder      = c_ipath
+      EXCEPTIONS
+        cntl_error           = 1
+        error_no_gui         = 2
+        not_supported_by_gui = 3
+        OTHERS               = 4.
+  ENDMETHOD.                    "sys_f4
+
+*---------------------------- Public Methods screen PAI Implementation *
+  METHOD screen_pai.
+    IF sy-ucomm = 'ONLI'.
+*---------- Fill Required fields  ----------*
+      t_so_trs = i_so_trs. "Requests
+      v_export = i_export. "Export only
+      v_system = i_system. "Target System
+      v_client = i_client. "Target client
+      v_import = i_import. "Import external requests
+      v_ipath  = i_ipath.  "Import directory
+
+*---------- Check Required fields ----------*
+      IF ( t_so_trs IS INITIAL AND v_import IS INITIAL ) OR ( v_import IS NOT INITIAL AND v_ipath IS INITIAL )
+        OR ( ( v_system IS INITIAL OR v_client IS INITIAL ) AND v_export IS INITIAL ).
+        MESSAGE e398(00) WITH 'Please fill all required fields'(m08) space space space DISPLAY LIKE 'I'.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.                    "screen_pai
+
+*-------------------------- Public Methods add requests Implementation *
+  METHOD add_requests.
+    DATA:
+      ls_so_trs          LIKE LINE OF t_so_trs,           "Request Range
+      ls_request         LIKE LINE OF t_requests,         "Request
+      lt_request_headers TYPE trwbo_request_headers,      "Requests headers
+      ls_request_header  LIKE LINE OF lt_request_headers. "Request header
+
+    progress_bar( i_value = 'Adding requests'(p04) i_tabix = '50' ).
+
+*---------- Add from Selection screen ----------*
+    LOOP AT t_so_trs INTO ls_so_trs.
+      CLEAR ls_request.
+
+*---------- Read Requests and Tasks ----------*
+      REFRESH lt_request_headers.
+      CALL FUNCTION 'TR_READ_REQUEST_WITH_TASKS'
+        EXPORTING
+          iv_trkorr          = ls_so_trs-low
+        IMPORTING
+          et_request_headers = lt_request_headers
+        EXCEPTIONS
+          invalid_input      = 1
+          OTHERS             = 2.
+
+*---------- Check if is Requests or Tasks ----------*
+      READ TABLE lt_request_headers INTO ls_request_header WITH KEY trkorr = ls_so_trs-low.
+      IF sy-subrc IS INITIAL AND ls_request_header-trfunction <> 'K'. "Is Task
+        ls_request-trkorr = ls_request_header-trkorr.
+        ls_request-task   = ls_so_trs-low.
+        READ TABLE lt_request_headers INTO ls_request_header WITH KEY trfunction = 'K'.  "Read request
+      ENDIF.
+
+*---------- Error Handling ----------*
+      IF sy-subrc IS NOT INITIAL.
+        IF ls_request-trkorr IS INITIAL.
+          ls_request-trkorr = ls_so_trs-low.
+        ENDIF.
+        ls_request-as4text = 'Critical error'(m06).
+        ls_request-legacy = icon_led_red.
+        APPEND ls_request TO t_requests.
+        CONTINUE.
+      ENDIF.
+
+*---------- Fill data ----------*
+      MOVE-CORRESPONDING ls_request_header TO ls_request.
+
+*---------- Set release status ----------*
+      IF ls_request_header-trstatus = 'R'.
+        ls_request-release = icon_led_green.
+      ELSE.
+        ls_request-release = icon_led_red.
+      ENDIF.
+
+*---------- Set legacy ----------*
+      ls_request-legacy = icon_sap.
+
+*---------- Add request ----------*
+      APPEND ls_request TO t_requests.
+    ENDLOOP.
+
+*---------- Add from upload directory ----------*
+    IF v_import IS NOT INITIAL.
+      add_requests_files( ).
+    ENDIF.
+
+    IF t_requests IS NOT INITIAL.
+      display_requests( ). "Result display
+    ELSE.
+      MESSAGE i398(00) WITH 'No Requests selected'(m01) space space space.
+    ENDIF.
+
+  ENDMETHOD.                    "add_requests
+
+*--------------- Public Handler On User Command Handler Implementation *
+  METHOD on_user_command.
+    CHECK e_salv_function = 'IMPORT' OR e_salv_function = 'EXPORT'.
+
+    DATA lr_selections TYPE REF TO cl_salv_selections. "ALV Selections
+
+    DATA:
+      lt_rows         TYPE salv_t_row,                "Selected rows
+      ls_row          TYPE i,
+      ls_request      LIKE LINE OF t_requests,        "Request line
+      lt_sel_requests TYPE TABLE OF ty_sel_requests.  "Selected request table
+
+*---------- Get selected lines ----------*
+    lr_selections = o_requests->get_selections( ).
+    lt_rows = lr_selections->get_selected_rows( ).
+
+    CASE e_salv_function.
+*---------- Import requests ----------*
+      WHEN 'IMPORT'.
+*        progress_bar( i_value = 'Importing requests'(p07) i_tabix = '50' ).
+*
+*        LOOP AT lt_rows INTO ls_row.  "Loop selected rows
+*          READ TABLE t_requests INTO ls_request INDEX ls_row. "Read selected requests
+*          IF sy-subrc IS INITIAL AND ( ls_request-legacy = icon_sap OR ls_request-legacy = icon_import ).
+*            APPEND ls_request-trkorr TO lt_sel_requests . "Add to importing
+*          ENDIF.
+*        ENDLOOP.
+*
+*        import_requests( lt_sel_requests ).
+
+*---------- Export requests ----------*
+      WHEN 'EXPORT'.
+        LOOP AT lt_rows INTO ls_row.  "Loop selected rows
+          READ TABLE t_requests INTO ls_request INDEX ls_row. "Read selected requests
+          IF sy-subrc IS INITIAL AND ls_request-legacy = icon_sap.
+            APPEND ls_request-trkorr TO lt_sel_requests . "Add to download
+          ENDIF.
+        ENDLOOP.
+
+        export_requests( lt_sel_requests ).
+    ENDCASE.
+
+    o_requests->refresh( ).
+
+  ENDMETHOD.                    "on_user_command
+
+*----------------------- Public Handler On Double Click Implementation *
+  METHOD on_double_click.
+
+  ENDMETHOD.                    "on_double_click
+
+*------------------------- Private Methods progress bar Implementation *
+  METHOD progress_bar.
+    DATA:
+      lv_text(40),
+      lv_percentage TYPE p,
+      lv_percent_char(3).
+
+    lv_percentage = ( i_tabix / 100 ) * 100.
+    lv_percent_char = lv_percentage.
+    SHIFT lv_percent_char LEFT DELETING LEADING ' '.
+    CONCATENATE i_value '...' INTO i_value.
+    CONCATENATE i_value lv_percent_char '% Complete'(pb1) INTO lv_text SEPARATED BY space.
+
+    IF lv_percentage GT v_percent OR i_tabix = 1.
+      CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+        EXPORTING
+          percentage = lv_percentage
+          text       = lv_text.
+      v_percent = lv_percentage.
+    ENDIF.
+  ENDMETHOD.                    "progress_bar
+
+*--------------------- Private Methods popup to confirm Implementation *
+  METHOD popup_to_confirm.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        titlebar       = i_title
+        text_question  = i_question
+      IMPORTING
+        answer         = r_answer
+      EXCEPTIONS
+        text_not_found = 1
+        OTHERS         = 2.
+  ENDMETHOD.                    "popup_to_confirm
+
+*-------------------------- Private Method read domain implementation *
+  METHOD read_domain.
+    DATA lv_system TYPE tmssysnam.
+
+    lv_system = sy-sysid.
+    CALL FUNCTION 'TMS_CFG_GET_DOMAIN_NAME'
+      EXPORTING
+        iv_system      = lv_system
+      IMPORTING
+        ev_domain_name = v_domain.
+  ENDMETHOD.                    "hide_so_tabs
+
+*-------------------------- Private Method hide SO tabs implementation *
+  METHOD hide_so_tabs.
+    DATA:
+      lt_restrict  TYPE sscr_restrict,
+      lt_opt_list  TYPE sscr_opt_list,
+      lt_associate TYPE sscr_ass.
+
+    lt_opt_list-name = 'EQ'.
+    lt_opt_list-options-eq = abap_true.
+    APPEND lt_opt_list TO lt_restrict-opt_list_tab.
+
+    lt_associate-kind    = 'S'.
+    lt_associate-name    = 'SO_TR'.
+    lt_associate-sg_main = 'I'.
+    lt_associate-sg_addy = ' '.
+    lt_associate-op_main = 'EQ'.
+    lt_associate-op_addy = 'EQ'.
+    APPEND lt_associate TO lt_restrict-ass_tab.
+
+    CALL FUNCTION 'SELECT_OPTIONS_RESTRICT'
+      EXPORTING
+        restriction            = lt_restrict
+      EXCEPTIONS
+        too_late               = 1
+        repeated               = 2
+        selopt_without_options = 3
+        selopt_without_signs   = 4
+        invalid_sign           = 5
+        empty_option_list      = 6
+        invalid_kind           = 7
+        repeated_kind_a        = 8
+        OTHERS                 = 9.
+
+    IF sy-subrc IS NOT INITIAL.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDMETHOD.                    "hide_so_tabs
+
+*------------------------ Private Methods display requests Implementation *
+  METHOD display_requests.
+    DATA:
+      lr_events     TYPE REF TO cl_salv_events_table,      "ALV Events
+      lr_display    TYPE REF TO cl_salv_display_settings,  "ALV Output Appearance
+      lr_columns    TYPE REF TO cl_salv_columns_table,     "ALV Columns
+      lr_column     TYPE REF TO cl_salv_column_table,
+      lr_selections TYPE REF TO cl_salv_selections,        "ALV Selections
+      lr_layout     TYPE REF TO cl_salv_layout,            "ALV Layout
+      lr_functions  TYPE REF TO cl_salv_functions.         "ALV Functions
+
+    DATA:
+      lt_column_ref TYPE salv_t_column_ref,     "Columns of ALV List
+      ls_column_ref TYPE salv_s_column_ref,
+      ls_key        TYPE salv_s_layout_key,
+      lt_func_list  TYPE salv_t_ui_func,        "Interface SALV_FUNCTION and Status or Tool
+      ls_func_list  TYPE salv_s_ui_func.
+
+    DATA:
+      lv_title   TYPE lvc_title,  "ALV title
+      lv_lines   TYPE i,          "Number of requests
+      lv_lines_c TYPE string.
+
+    progress_bar( i_value = 'Display requests'(p03) i_tabix = '90' ).
+
+    TRY.
+*---------- Create ALV ----------*
+        cl_salv_table=>factory( IMPORTING r_salv_table = o_requests
+                                 CHANGING t_table      = t_requests ).
+
+*---------- Set ALV Functions ----------*
+        o_requests->set_screen_status(
+          pfstatus      = 'STATUS'
+          report        = sy-cprog
+          set_functions = o_requests->c_functions_all ).
+
+        IF v_export IS NOT INITIAL.
+          lr_functions =  o_requests->get_functions( ).
+          lt_func_list = lr_functions->get_functions( ).
+          LOOP AT lt_func_list INTO ls_func_list.
+            IF ls_func_list-r_function->get_name( ) = 'IMPORT'.
+              ls_func_list-r_function->set_visible( if_salv_c_bool_sap=>false ).
+            ENDIF.
+          ENDLOOP.
+        ENDIF.
+
+*---------- Set Layout ----------*
+        lr_layout = o_requests->get_layout( ).
+        ls_key-report = sy-repid.
+        lr_layout->set_key( ls_key ).
+        lr_layout->set_save_restriction( ).
+
+*---------- Set ALV selections ----------*
+        lr_selections = o_requests->get_selections( ).
+        lr_selections->set_selection_mode( if_salv_c_selection_mode=>row_column ).
+
+*---------- Set ALV Display and Title ----------*
+        lr_display = o_requests->get_display_settings( ).
+        lr_display->set_striped_pattern( if_salv_c_bool_sap=>true ).
+
+        lv_lines = lines( t_requests ).
+        lv_lines_c = lv_lines.
+        CONDENSE lv_lines_c NO-GAPS.
+        CONCATENATE '(' lv_lines_c ')' INTO lv_lines_c.
+        IF v_export IS INITIAL.
+          CONCATENATE sy-title 'to'(t01) v_system lv_lines_c INTO lv_title SEPARATED BY space.
+        ELSE.
+          CONCATENATE sy-title 'to export'(t02) lv_lines_c INTO lv_title SEPARATED BY space.
+        ENDIF.
+        lr_display->set_list_header( lv_title ).
+
+*---------- Set ALV Columns ----------*
+        lr_columns = o_requests->get_columns( ).
+        lr_columns->set_key_fixation( ).
+        lr_columns->set_optimize( ).
+        lt_column_ref = lr_columns->get( ).
+
+        LOOP AT lt_column_ref INTO ls_column_ref. "Default format for all columns
+          lr_column ?= lr_columns->get_column( ls_column_ref-columnname ).
+          lr_column->set_f4( if_salv_c_bool_sap=>false ).
+          lr_column->set_alignment( if_salv_c_alignment=>centered ).
+
+          IF ls_column_ref-columnname = 'LEGACY'.
+            lr_column->set_key( if_salv_c_bool_sap=>true ).
+            lr_column->set_short_text( 'Legacy'(c01) ).
+            lr_column->set_medium_text( 'Legacy'(c01) ).
+            lr_column->set_long_text( 'Legacy'(c01) ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'TRKORR'.
+            lr_column->set_key( if_salv_c_bool_sap=>true ).
+            lr_column->set_short_text( 'Request'(c05) ).
+            lr_column->set_medium_text( 'Request'(c05) ).
+            lr_column->set_long_text( 'Request'(c05) ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'AS4TEXT'.
+            lr_column->set_alignment( if_salv_c_alignment=>left ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'TASK'.
+            lr_column->set_key( if_salv_c_bool_sap=>true ).
+            lr_column->set_short_text( 'Task'(c06) ).
+            lr_column->set_medium_text( 'Task'(c06) ).
+            lr_column->set_long_text( 'Task'(c06) ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'RELEASE'.
+            lr_column->set_short_text( 'Rel. St.'(c02) ).
+            lr_column->set_medium_text( 'Rel. St.'(c02) ).
+            lr_column->set_long_text( 'Rel. St.'(c02) ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'EXPORT'.
+            lr_column->set_short_text( 'Export St.'(c08) ).
+            lr_column->set_medium_text( 'Export St.'(c08) ).
+            lr_column->set_long_text( 'Export St.'(c08) ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'UPLOAD'.
+            lr_column->set_short_text( 'Upload St.'(c07) ).
+            lr_column->set_medium_text( 'Upload St.'(c07) ).
+            lr_column->set_long_text( 'Upload St.'(c07) ).
+
+            IF v_export IS NOT INITIAL.
+              lr_column->set_visible( if_salv_c_bool_sap=>false ).
+            ENDIF.
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'QUEUE'.
+            lr_column->set_short_text( 'Queue St.'(c03) ).
+            lr_column->set_medium_text( 'Queue St.'(c03) ).
+            lr_column->set_long_text( 'Queue St.'(c03) ).
+
+            IF v_export IS NOT INITIAL.
+              lr_column->set_visible( if_salv_c_bool_sap=>false ).
+            ENDIF.
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'IMPORT'.
+            lr_column->set_short_text( 'Imp. St.'(c04) ).
+            lr_column->set_medium_text( 'Imp. St.'(c04) ).
+            lr_column->set_long_text( 'Imp. St.'(c04) ).
+
+            IF v_export IS NOT INITIAL.
+              lr_column->set_visible( if_salv_c_bool_sap=>false ).
+            ENDIF.
+          ENDIF.
+        ENDLOOP.
+
+*---------- Register ALV Events ----------*
+        lr_events = o_requests->get_event( ).
+        SET HANDLER on_user_command FOR lr_events.
+        SET HANDLER on_double_click FOR lr_events.
+
+*---------- Display Objects ALV ----------*
+        o_requests->display( ).
+
+      CATCH cx_root.                                     "#EC CATCH_ALL
+        MESSAGE s398(00) WITH 'Critical error'(m06) space space space DISPLAY LIKE 'E'.
+    ENDTRY.
+  ENDMETHOD.                    "display_requests
+
+*---------------------- Private Methods export requests Implementation *
+  METHOD export_requests.
+    CONSTANTS:
+      lc_r       TYPE c       VALUE 'R',          "Confiles file name prefix
+      lc_cofiles TYPE string  VALUE 'cofiles',    "Confiles sub directory
+      lc_data    TYPE string  VALUE 'data',       "Data sub directory
+      lc_name    TYPE text255 VALUE 'DIR_TRANS'.  "SAP transport directory
+
+    DATA:
+      lt_request_headers TYPE trwbo_request_headers,      "Request headers
+      ls_request_headers LIKE LINE OF lt_request_headers, "Request header
+      ls_request         LIKE LINE OF it_requests.         "Request
+
+    DATA:
+      lv_selected_folder TYPE string,   "Download directory
+      lv_transdir        TYPE text255,  "Transport directory
+      lv_sep             TYPE c,        "Path separeter
+      lv_trfile(20)      TYPE c.
+
+    FIELD-SYMBOLS:
+      <ls_request_headers> LIKE LINE OF lt_request_headers, "Request header
+      <ls_request>         LIKE LINE OF t_requests.
+
+    progress_bar( i_value = 'Exporting requests'(p08) i_tabix = '50' ).
+
+*---------- Check selected requests ----------*
+    IF it_requests IS INITIAL.
+      MESSAGE i398(00) WITH 'No Requests selected'(m01) space space space.
+      EXIT.
+    ENDIF.
+
+*---------- Release warning ----------*
+    IF popup_to_confirm( i_title = 'Release warning'(p01) i_question = 'All requests and tasks will be released. Continue?'(p02) ) <> '1'.
+      EXIT.
+    ENDIF.
+
+*---------- Get save directory ----------*
+    CALL METHOD cl_gui_frontend_services=>directory_browse
+      CHANGING
+        selected_folder      = lv_selected_folder
+      EXCEPTIONS
+        cntl_error           = 1
+        error_no_gui         = 2
+        not_supported_by_gui = 3
+        OTHERS               = 4.
+
+*---------- Get transport directory ----------*
+    IF sy-subrc IS INITIAL AND lv_selected_folder IS NOT INITIAL.
+      CALL FUNCTION 'RSPO_R_SAPGPARAM'
+        EXPORTING
+          name   = lc_name
+        IMPORTING
+          value  = lv_transdir
+        EXCEPTIONS
+          error  = 1
+          OTHERS = 2.
+
+      IF sy-subrc IS NOT INITIAL OR lv_transdir IS INITIAL.
+        MESSAGE e398(00) WITH 'Error exporting to file(s)'(m02) space space space DISPLAY LIKE 'I'.
+        EXIT.
+      ENDIF.
+
+*---------- Format folders separater ----------*
+      CALL FUNCTION 'WSAF_BUILD_SEPARATOR'
+        IMPORTING
+          separator                  = lv_sep
+        EXCEPTIONS
+          separator_not_maintained   = 1
+          wrong_call                 = 2
+          wsaf_config_not_maintained = 3
+          OTHERS                     = 4.
+
+      IF sy-subrc IS NOT INITIAL.
+        MESSAGE e398(00) WITH 'Error exporting to file(s)'(m02) space space space DISPLAY LIKE 'I'.
+        EXIT.
+      ENDIF.
+
+*---------- Export selected requests ----------*
+      LOOP AT it_requests INTO ls_request.
+
+*---------- Read request header ----------*
+        REFRESH lt_request_headers.
+        CALL FUNCTION 'TR_READ_REQUEST_WITH_TASKS'
+          EXPORTING
+            iv_trkorr          = ls_request-trkorr
+          IMPORTING
+            et_request_headers = lt_request_headers
+          EXCEPTIONS
+            invalid_input      = 1
+            OTHERS             = 2.
+
+*---------- Release request ----------*
+        SORT lt_request_headers BY trfunction DESCENDING.
+        LOOP AT lt_request_headers ASSIGNING <ls_request_headers> WHERE trstatus = 'D'.
+          READ TABLE t_requests ASSIGNING <ls_request> WITH KEY trkorr = <ls_request_headers>-trkorr.
+          IF sy-subrc IS INITIAL.
+            IF release_request( <ls_request_headers>-trkorr ) IS NOT INITIAL. "Released with success
+              <ls_request_headers>-trstatus = 'R'.
+              <ls_request>-release = icon_led_green.
+
+            ELSE. "Errors releasing
+              <ls_request>-release = icon_led_red.
+              EXIT.
+            ENDIF.
+          ENDIF.
+        ENDLOOP.
+
+        WAIT UP TO 1 SECONDS.
+
+*---------- Download request from Application Server ----------*
+        LOOP AT lt_request_headers INTO ls_request_headers WHERE trfunction = 'K' AND trstatus   = 'R'.
+          READ TABLE t_requests ASSIGNING <ls_request> WITH KEY trkorr = ls_request_headers-trkorr.
+          IF sy-subrc IS INITIAL.
+
+            CONCATENATE ls_request_headers-trkorr+3(7) '.' ls_request_headers-trkorr(3) INTO lv_trfile.
+            IF download_app_request( i_subdir   = lc_cofiles           "Transport sub directory
+                                     i_fname    = lv_trfile            "File name
+                                     i_transdir = lv_transdir          "Transport directory
+                                     i_folder   = lv_selected_folder   "Directory
+                                     i_sep      = lv_sep ) IS INITIAL. "Separator
+              <ls_request>-export = icon_led_red. "Error exporting
+              EXIT.
+            ENDIF.
+
+            lv_trfile(1) = lc_r.
+            IF download_app_request( i_subdir   = lc_data              "Transport sub directory
+                                     i_fname    = lv_trfile             "File name
+                                     i_transdir = lv_transdir           "Transport directory
+                                     i_folder   = lv_selected_folder    "Directory
+                                     i_sep      = lv_sep ) IS INITIAL.  "Separator
+              <ls_request>-export = icon_led_red. "Error exporting
+              EXIT.
+            ENDIF.
+
+            <ls_request>-export = icon_led_green. "Export OK
+          ENDIF.
+        ENDLOOP.
+
+      ENDLOOP.
+    ENDIF.
+
+    MESSAGE i398(00) WITH 'Export done. Please check log'(m05) space space space.
+  ENDMETHOD.                    "export_requests
+
+*---------------------- Private Methods import requests Implementation *
+  METHOD import_requests.
+
+    DATA ls_request LIKE LINE OF it_requests. "Requests table
+
+    FIELD-SYMBOLS <ls_request> LIKE LINE OF t_requests.
+
+*---------- Check Requests ----------*
+    IF it_requests IS INITIAL.
+      MESSAGE i398(00) WITH 'No Requests selected'(m01) space space space.
+      EXIT.
+    ENDIF.
+
+*---------- Release warning ----------*
+    IF popup_to_confirm( i_title = 'Import warning'(p05) i_question = 'All selected requests will be imported. Continue?'(p06) ) <> '1'.
+      EXIT.
+    ENDIF.
+
+*---------- Import selected requests ----------*
+    LOOP AT it_requests INTO ls_request.
+      READ TABLE t_requests ASSIGNING <ls_request> WITH KEY trkorr = ls_request-trkorr.
+      IF sy-subrc IS INITIAL.
+        CASE <ls_request>-legacy.
+*---------- Upload External Request ----------*
+          WHEN icon_import.
+*---------- Upload External Request to queue ----------*
+            IF <ls_request>-upload <> icon_led_green.
+              IF upload_request( <ls_request>-trkorr ) IS NOT INITIAL.
+                <ls_request>-upload = icon_led_green.
+              ELSE.
+                <ls_request>-upload = icon_led_red.
+                CONTINUE.
+              ENDIF.
+            ENDIF.
+
+*---------- Add External Request to queue ----------*
+            IF <ls_request>-queue <> icon_led_green.
+              IF add_request_queue( <ls_request>-trkorr ) IS NOT INITIAL.
+                <ls_request>-queue = icon_led_green.
+              ELSE.
+                <ls_request>-queue = icon_led_red.
+                CONTINUE.
+              ENDIF.
+            ENDIF.
+
+*---------- Internal Request ----------*
+          WHEN icon_sap.
+*---------- Release Internal Request ----------*
+            IF <ls_request>-release <> icon_led_green.
+              IF release_request( <ls_request>-trkorr ) IS NOT INITIAL.
+                <ls_request>-release = icon_led_green.
+              ELSE.
+                <ls_request>-release = icon_led_red.
+                CONTINUE.
+              ENDIF.
+            ENDIF.
+
+*---------- Add Internal Request to queue ----------*
+            IF <ls_request>-queue <> icon_led_green.
+              IF add_request_queue( <ls_request>-trkorr ) IS NOT INITIAL.
+                <ls_request>-queue = icon_led_green.
+              ELSE.
+                <ls_request>-queue = icon_led_red.
+                CONTINUE.
+              ENDIF.
+            ENDIF.
+        ENDCASE.
+
+*---------- Import request ----------*
+        IF <ls_request>-import <> icon_led_green.
+          IF import_request( <ls_request>-trkorr ) IS NOT INITIAL.
+            <ls_request>-import = icon_led_green.
+          ELSE.
+            <ls_request>-import = icon_led_red.
+          ENDIF.
+        ENDIF.
+
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.                    "import_requests
+
+*--------------------- Private Methods release requests Implementation *
+  METHOD release_request.
+    CALL FUNCTION 'TR_RELEASE_REQUEST'
+      EXPORTING
+        iv_trkorr                  = i_request
+        iv_dialog                  = abap_false
+      EXCEPTIONS
+        cts_initialization_failure = 1
+        enqueue_failed             = 2
+        no_authorization           = 3
+        invalid_request            = 4
+        request_already_released   = 5
+        repeat_too_early           = 6
+        error_in_export_methods    = 7
+        object_check_error         = 8
+        docu_missing               = 9
+        db_access_error            = 10
+        action_aborted_by_user     = 11
+        export_failed              = 12
+        OTHERS                     = 13.
+
+    IF sy-subrc IS INITIAL.
+      r_released = abap_true.
+    ENDIF.
+  ENDMETHOD.                    "release_request
+
+*------------- Private Methods download server requests Implementation *
+  METHOD download_app_request.
+    DATA:
+      lt_datatab TYPE TABLE OF x, "Data table
+      ls_datatab TYPE x.
+
+    DATA:
+      lv_auth_filename TYPE fileextern, "File name
+      lv_gui_filename  TYPE string,
+      lv_filename(255),
+      lv_len           TYPE i,  "File leght
+      lv_flen          TYPE i.
+
+*---------- Set path and file name ----------*
+    CONCATENATE i_transdir i_subdir i_fname INTO lv_filename SEPARATED BY i_sep.
+
+*---------- Check autorizations ----------*
+    lv_auth_filename = lv_filename.
+    CALL FUNCTION 'AUTHORITY_CHECK_DATASET'
+      EXPORTING
+        activity         = 'READ'
+        filename         = lv_auth_filename
+      EXCEPTIONS
+        no_authority     = 1
+        activity_unknown = 2
+        OTHERS           = 3.
+
+    IF sy-subrc IS NOT INITIAL.
+      EXIT.
+    ENDIF.
+
+*---------- Read app files ----------*
+    OPEN DATASET lv_filename FOR INPUT IN BINARY MODE.
+    IF sy-subrc IS NOT INITIAL. "File open error
+      EXIT.
+    ENDIF.
+
+    DO.
+      CLEAR lv_len.
+      READ DATASET lv_filename INTO ls_datatab LENGTH lv_len.
+      lv_flen = lv_flen + lv_len.
+      IF lv_len > 0.
+        APPEND ls_datatab TO lt_datatab.
+      ENDIF.
+
+      IF sy-subrc IS NOT INITIAL.
+        EXIT.
+      ENDIF.
+    ENDDO.
+
+    CLOSE DATASET lv_filename.
+
+*---------- Download ----------*
+    CONCATENATE i_folder '\' i_fname INTO lv_gui_filename.
+    CALL METHOD cl_gui_frontend_services=>gui_download
+      EXPORTING
+        bin_filesize            = lv_flen
+        filename                = lv_gui_filename
+        filetype                = 'BIN'
+      CHANGING
+        data_tab                = lt_datatab
+      EXCEPTIONS
+        file_write_error        = 1
+        no_batch                = 2
+        gui_refuse_filetransfer = 3
+        invalid_type            = 4
+        no_authority            = 5
+        unknown_error           = 6
+        header_not_allowed      = 7
+        separator_not_allowed   = 8
+        filesize_not_allowed    = 9
+        header_too_long         = 10
+        dp_error_create         = 11
+        dp_error_send           = 12
+        dp_error_write          = 13
+        unknown_dp_error        = 14
+        access_denied           = 15
+        dp_out_of_memory        = 16
+        disk_full               = 17
+        dp_timeout              = 18
+        file_not_found          = 19
+        dataprovider_exception  = 20
+        control_flush_error     = 21
+        not_supported_by_gui    = 22
+        error_no_gui            = 23
+        OTHERS                  = 24.
+
+    IF sy-subrc IS INITIAL.
+      r_download = abap_true.
+    ENDIF.
+  ENDMETHOD.                    "download_app_request
+
+*-------------- Private Methods add requests from files Implementation *
+  METHOD add_requests_files.
+    DATA:
+     lt_files      TYPE TABLE OF file_table,    "File table
+     ls_file       LIKE LINE OF lt_files,
+     ls_request    LIKE LINE OF t_requests,     "Request line
+     lt_result_tab TYPE TABLE OF string,        "Result table
+     ls_result_tab LIKE LINE OF lt_result_tab.
+
+    DATA:
+      lv_count    TYPE i,       "Files counter
+      lv_filename TYPE string,  "File name
+      lv_ext      TYPE string.  "File extention
+
+*---------- Get upload directory files ----------*
+    CALL METHOD cl_gui_frontend_services=>directory_list_files
+      EXPORTING
+        directory                   = v_ipath
+        files_only                  = abap_true
+      CHANGING
+        file_table                  = lt_files
+        count                       = lv_count
+      EXCEPTIONS
+        cntl_error                  = 1
+        directory_list_files_failed = 2
+        wrong_parameter             = 3
+        error_no_gui                = 4
+        not_supported_by_gui        = 5
+        OTHERS                      = 6.
+
+*---------- Add files ----------*
+    LOOP AT lt_files INTO ls_file.
+      REFRESH lt_result_tab.
+      SPLIT ls_file AT '\' INTO TABLE lt_result_tab.
+
+*---------- Check if already added ----------*
+      READ TABLE lt_result_tab INTO ls_result_tab INDEX lines( lt_result_tab ).
+      IF sy-subrc IS INITIAL AND ls_result_tab(1) = 'K'.
+
+*---------- Set request ----------*
+        ls_request-trkorr = ls_file.
+
+*---------- Set description ----------*
+        SPLIT ls_file AT '.' INTO lv_filename lv_ext.
+        lv_filename = lv_ext && lv_filename.
+        CONCATENATE 'External Request'(d01) lv_filename INTO ls_request-as4text SEPARATED BY space.
+
+*---------- Set release status ----------*
+        ls_request-release = icon_led_green.
+
+*---------- Set legacy ----------*
+        ls_request-legacy = icon_import.
+
+*---------- Add request ----------*
+        APPEND ls_request TO t_requests.
+        CLEAR ls_request.
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.                    "add_requests_files
+
+*-------------- Private Methods Upload request from files Implementation *
+  METHOD upload_request.
+
+
+
+  ENDMETHOD.                    "upload_request
+
+*----------------- Private Methods Add request to queue Implementation *
+  METHOD add_request_queue.
+    CALL FUNCTION 'TMS_MGR_FORWARD_TR_REQUEST'
+      EXPORTING
+        iv_request                 = i_request
+        iv_target                  = v_system
+        iv_tardom                  = v_domain
+        iv_tarcli                  = v_client
+        iv_source                  = v_system
+        iv_srcdom                  = v_domain
+        iv_import_again            = abap_true
+      EXCEPTIONS
+        read_config_failed         = 1
+        table_of_requests_is_empty = 2
+        OTHERS                     = 3.
+
+    IF sy-subrc IS INITIAL.
+      r_added = abap_true.
+    ENDIF.
+  ENDMETHOD.                    "add_request_queue
+
+*----------------------- Private Methods Import request Implementation *
+  METHOD import_request.
+    CALL FUNCTION 'TMS_MGR_IMPORT_TR_REQUEST'
+      EXPORTING
+        iv_system                  = v_system
+        iv_domain                  = v_domain
+        iv_request                 = i_request
+        iv_client                  = v_client
+        iv_ctc_active              = abap_true
+        iv_overtake                = abap_true
+        iv_import_again            = abap_true
+        iv_ignore_originality      = abap_true
+        iv_ignore_repairs          = abap_true
+        iv_subset                  = abap_true
+        iv_monitor                 = abap_true
+      EXCEPTIONS
+        read_config_failed         = 1
+        table_of_requests_is_empty = 2
+        OTHERS                     = 3.
+
+    IF sy-subrc IS INITIAL.
+      r_imported = abap_true.
+    ENDIF.
+  ENDMETHOD.                    "import_request
+
+ENDCLASS.                    "trans_copy IMPLEMENTATION
