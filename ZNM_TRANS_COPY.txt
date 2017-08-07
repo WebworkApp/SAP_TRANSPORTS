@@ -1,4 +1,4 @@
-REPORT znm_devt_trans_copy MESSAGE-ID 00.
+REPORT znm_trans_copy MESSAGE-ID 00.
 *----------------------------------------------------------------------*
 * Created by NM for Cross System Transport Request Copy
 *----------------------------------------------------------------------*
@@ -190,7 +190,7 @@ AT SELECTION-SCREEN.
                      i_export = p_export    "Export only
                      i_system = p_system    "Target system
                      i_client = p_client    "Target client
-                     i_import = p_import    "Import externaç requests
+                     i_import = p_import    "Import externaÃ§ requests
                      i_ipath  = p_ipath ).  "Import  directory
 
 *------------------------------------------------------- REPORT EVENTS *
